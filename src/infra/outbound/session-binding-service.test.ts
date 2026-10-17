@@ -248,17 +248,17 @@ describe("session binding service", () => {
     }
   });
 
-  it("keeps unscoped adapter calls in the caller plugin instance", async () => {
+  it("runs adapters registered outside a plugin instance in the caller plugin instance", async () => {
     const runtime = createPluginRuntimeStore<{ owner: string }>({
-      key: "unscoped-session-binding-adapter-test",
-      errorMessage: "Unscoped adapter runtime not initialized",
+      key: "outside-instance-session-binding-adapter-test",
+      errorMessage: "Outside-instance adapter runtime not initialized",
     });
     const callerInstance = new PluginInstance("caller-plugin");
-    const observedOwner = vi.fn();
+    let observedOwner: string | undefined;
     const scope = conversation("adapter-chat");
     register({
       unbind: async () => {
-        observedOwner(runtime.getRuntime().owner);
+        observedOwner = runtime.getRuntime().owner;
         return [];
       },
     });
@@ -272,7 +272,7 @@ describe("session binding service", () => {
           reason: "manual",
         });
       });
-      expect(observedOwner).toHaveBeenCalledExactlyOnceWith("caller-plugin");
+      expect(observedOwner).toBe("caller-plugin");
     } finally {
       await callerInstance.dispose();
     }
