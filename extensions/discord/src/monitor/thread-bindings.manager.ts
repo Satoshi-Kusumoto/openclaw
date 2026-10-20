@@ -1,4 +1,5 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import {
   resolveThreadBindingFarewellText,
   resolveThreadBindingThreadName,
@@ -18,6 +19,7 @@ import { registerSessionBindingAdapterV2 } from "openclaw/plugin-sdk/thread-bind
 import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { getChannel } from "../internal/discord.js";
+import { getOptionalDiscordRuntime } from "../runtime.js";
 import {
   createThreadForBinding,
   createWebhookForChannel,
@@ -40,6 +42,7 @@ import {
 } from "./thread-bindings.persistence.js";
 import { createThreadBindingSessionAdapter } from "./thread-bindings.session-adapter.js";
 import {
+  THREAD_BINDINGS_STATE,
   BINDINGS_BY_THREAD_ID,
   forgetThreadBindingToken,
   getThreadBindingToken,
@@ -58,6 +61,7 @@ import {
   resolveThreadBindingMaxAgeMs,
   THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
   shouldDefaultPersist,
+  type ThreadBindingsOwner,
 } from "./thread-bindings.state.js";
 import {
   DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
@@ -89,10 +93,19 @@ export async function createThreadBindingManager(input: {
   idleTimeoutMs?: number;
   maxAgeMs?: number;
 }): Promise<ThreadBindingManager> {
+  // Adapter calls can run in another plugin's instance (for example `/codex detach`),
+  // so persistence keeps the runtime of the Discord instance that owns this manager.
+  const owner: ThreadBindingsOwner = { runtime: getOptionalDiscordRuntime() };
+  const resolveRuntime = (): PluginRuntime => {
+    if (!owner.runtime) {
+      throw new Error("Discord runtime not initialized");
+    }
+    return owner.runtime;
+  };
   const params = { ...input };
-  await ensureBindingsLoadedAsync();
+  await ensureBindingsLoadedAsync(resolveRuntime);
   const manager = await runThreadBindingMutation(async () =>
-    createLoadedThreadBindingManager(params),
+    createLoadedThreadBindingManager(params, owner, resolveRuntime),
   );
   if (manager.isStopping()) {
     await manager.stop();
@@ -103,11 +116,19 @@ export async function createThreadBindingManager(input: {
 
 function createLoadedThreadBindingManager(
   params: Parameters<typeof createThreadBindingManager>[0],
+  owner: ThreadBindingsOwner,
+  resolveRuntime: () => PluginRuntime,
 ): ThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const existing = MANAGERS_BY_ACCOUNT_ID.get(accountId);
   rememberThreadBindingToken({ accountId, token: params.token });
   if (existing) {
+    // A replacement provider can reach a manager its timed-out predecessor has not stopped yet,
+    // so the manager adopts the replacement provider's runtime.
+    const existingOwner = THREAD_BINDINGS_STATE.ownersByManager.get(existing);
+    if (owner.runtime && existingOwner) {
+      existingOwner.runtime = owner.runtime;
+    }
     return existing;
   }
 
@@ -258,6 +279,7 @@ function createLoadedThreadBindingManager(
       previous: existingLocal,
       next: null,
       persist: unbindParams.persist ?? persist,
+      resolveRuntime,
       assertCurrent: () => {
         assertManagerCurrent();
         unbindParams.assertCurrent?.();
@@ -329,6 +351,7 @@ function createLoadedThreadBindingManager(
         transform: (record) => touchBindingRecord(record, at),
         persist: (input.persist ?? persist) && shouldPersistAnyBindingState(),
         minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
+        resolveRuntime,
       });
     },
     touchThread: (input) => {
@@ -349,6 +372,7 @@ function createLoadedThreadBindingManager(
           next: nextRecord,
           persist: (touchParams.persist ?? persist) && shouldPersistAnyBindingState(),
           minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
+          resolveRuntime,
           assertCurrent: assertManagerCurrent,
         });
         return nextRecord;
@@ -489,6 +513,7 @@ function createLoadedThreadBindingManager(
             previous: existingValue,
             next: record,
             persist,
+            resolveRuntime,
             assertCurrent: () => {
               assertManagerCurrent();
               if (!nativeBindingCreated) {
@@ -610,6 +635,7 @@ function createLoadedThreadBindingManager(
   registerSessionBindingAdapterV2(sessionBindingAdapter);
 
   MANAGERS_BY_ACCOUNT_ID.set(accountId, manager);
+  THREAD_BINDINGS_STATE.ownersByManager.set(manager, owner);
   return manager;
 }
 

@@ -1,9 +1,9 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripUndefinedFields } from "../internal/undefined-fields.js";
-import { getDiscordRuntime } from "../runtime.js";
 import {
   BINDINGS_BY_THREAD_ID,
   PERSIST_BY_ACCOUNT_ID,
@@ -69,6 +69,7 @@ export async function commitBindingRecord(params: {
   next: ThreadBindingRecord | null;
   persist: boolean;
   minIntervalMs?: number;
+  resolveRuntime: () => PluginRuntime;
   assertCurrent?: () => void;
 }): Promise<void> {
   let authorityRefused = false;
@@ -100,7 +101,7 @@ export async function commitBindingRecord(params: {
       records.delete(params.bindingKey);
     }
     try {
-      const store = openThreadBindingsStoreAsync();
+      const store = openThreadBindingsStoreAsync(params.resolveRuntime);
       // Preserve the namespace's registration order and bounded eviction recency.
       for (const [key, record] of records) {
         assertCurrent();
@@ -135,7 +136,7 @@ export async function commitBindingRecord(params: {
       }
       if (authorityRefused) {
         createPluginStateErrorReporter(
-          getDiscordRuntime,
+          params.resolveRuntime,
           "discord",
           "thread-bindings",
           "Discord thread binding save interrupted; acknowledged writes were retained.",
@@ -170,11 +171,14 @@ export async function commitBindingRecord(params: {
   }
 }
 
-function persistBindingsSync(update?: {
-  bindingKey: string;
-  transform: (record: ThreadBindingRecord) => ThreadBindingRecord;
-}): ThreadBindingRecord | undefined {
-  const store = openThreadBindingsStore();
+function persistBindingsSync(
+  resolveRuntime: () => PluginRuntime,
+  update?: {
+    bindingKey: string;
+    transform: (record: ThreadBindingRecord) => ThreadBindingRecord;
+  },
+): ThreadBindingRecord | undefined {
+  const store = openThreadBindingsStore(resolveRuntime);
   let updatedRecord: ThreadBindingRecord | undefined;
   for (const [key, record] of BINDINGS_BY_THREAD_ID) {
     if (key === update?.bindingKey) {
@@ -207,6 +211,7 @@ export function updateBindingRecordSync(params: {
   transform: (record: ThreadBindingRecord) => ThreadBindingRecord;
   persist: boolean;
   minIntervalMs?: number;
+  resolveRuntime: () => PluginRuntime;
 }): ThreadBindingRecord | null {
   const record = BINDINGS_BY_THREAD_ID.get(params.bindingKey);
   if (!record) {
@@ -220,7 +225,7 @@ export function updateBindingRecordSync(params: {
       now - THREAD_BINDINGS_STATE.lastPersistedAtMs >= params.minIntervalMs);
   if (persist) {
     try {
-      const updated = persistBindingsSync(params);
+      const updated = persistBindingsSync(params.resolveRuntime, params);
       return updated ?? null;
     } catch {
       THREAD_BINDINGS_STATE.persistenceAvailable = false;
@@ -237,7 +242,10 @@ export function updateBindingRecordSync(params: {
 }
 
 /** Public SDK compatibility only; bundled callers await worker mutations. */
-export function removeBindingRecordSync(bindingKey: string): ThreadBindingRecord | null {
+export function removeBindingRecordSync(
+  bindingKey: string,
+  resolveRuntime: () => PluginRuntime,
+): ThreadBindingRecord | null {
   const record = BINDINGS_BY_THREAD_ID.get(bindingKey);
   if (!record) {
     return null;
@@ -247,10 +255,10 @@ export function removeBindingRecordSync(bindingKey: string): ThreadBindingRecord
   }
   let removed: ThreadBindingRecord | null = null;
   try {
-    const store = openThreadBindingsStore();
+    const store = openThreadBindingsStore(resolveRuntime);
     store.delete(bindingKey);
     removed = removeBindingRecord(bindingKey);
-    persistBindingsSync();
+    persistBindingsSync(resolveRuntime);
     return removed;
   } catch {
     THREAD_BINDINGS_STATE.persistenceAvailable = false;

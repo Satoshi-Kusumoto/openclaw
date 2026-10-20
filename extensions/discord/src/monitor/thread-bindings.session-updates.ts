@@ -1,5 +1,6 @@
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import { getDiscordRuntime } from "../runtime.js";
 import {
   resolveBindingIdsForTargetSession,
   mutateBindingsForTargetSession,
@@ -38,7 +39,7 @@ function createDurationSetters<Field extends "idleTimeoutMs" | "maxAgeMs">(field
         method,
         replacement: `${method}Async`,
       });
-      ensureBindingsLoaded();
+      ensureBindingsLoaded(getDiscordRuntime);
       const ids = resolveBindingIdsForTargetSession(params);
       return updateBindingsForTargetSessionSync(ids, createDurationUpdate(field, params[field]));
     },

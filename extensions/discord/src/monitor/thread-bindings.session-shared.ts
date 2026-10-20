@@ -1,4 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { getDiscordRuntime } from "../runtime.js";
 import {
   commitBindingRecord,
   updateBindingRecordSync,
@@ -11,6 +12,7 @@ import {
   ensureBindingsLoadedAsync,
   resolveBindingIdsForSession,
   MANAGERS_BY_ACCOUNT_ID,
+  resolveThreadBindingsOwnerRuntime,
 } from "./thread-bindings.state.js";
 import type {
   ThreadBindingManager,
@@ -46,7 +48,7 @@ export function mutateBindingsForTargetSession(
   // Include pending binds whose target rows do not exist until their account work settles.
   return runThreadBindingAccountOperation(managers, () =>
     runThreadBindingMutation(async () => {
-      await ensureBindingsLoadedAsync();
+      await ensureBindingsLoadedAsync(getDiscordRuntime);
       const ids = resolveBindingIdsForTargetSession(params);
       for (const bindingKey of ids) {
         const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
@@ -73,6 +75,7 @@ export function mutateBindingsForTargetSession(
           previous: existing,
           next: nextRecord,
           persist: shouldPersistBindingMutations(),
+          resolveRuntime: resolveThreadBindingsOwnerRuntime(manager),
         });
         if (!nextRecord) {
           onRemoved?.(existing, manager);
@@ -96,7 +99,8 @@ export function updateBindingsForTargetSessionSync(
     if (!existing) {
       continue;
     }
-    if (MANAGERS_BY_ACCOUNT_ID.get(existing.accountId)?.isStopping()) {
+    const manager = MANAGERS_BY_ACCOUNT_ID.get(existing.accountId);
+    if (manager?.isStopping()) {
       throw new Error("Discord thread binding manager is stopping");
     }
     const next = updateBindingRecordSync({
@@ -104,6 +108,7 @@ export function updateBindingsForTargetSessionSync(
       transform: (record) =>
         record.targetSessionKey === existing.targetSessionKey ? update(record, now) : record,
       persist: shouldPersistBindingMutations(),
+      resolveRuntime: resolveThreadBindingsOwnerRuntime(manager),
     });
     if (next?.targetSessionKey === existing.targetSessionKey) {
       updated.push(next);

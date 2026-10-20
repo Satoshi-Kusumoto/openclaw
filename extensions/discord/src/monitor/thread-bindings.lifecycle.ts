@@ -19,6 +19,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import { getDiscordRuntime } from "../runtime.js";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
@@ -34,6 +35,7 @@ import {
   MANAGERS_BY_ACCOUNT_ID,
   getThreadBindingToken,
   refreshUnboundThreadWebhookIdentity,
+  resolveThreadBindingsOwnerRuntime,
 } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
 export {
@@ -78,14 +80,14 @@ export function listThreadBindingsBySessionKey(params: {
     method: "listThreadBindingsBySessionKey",
     replacement: "listThreadBindingsBySessionKeyAsync",
   });
-  ensureBindingsLoaded();
+  ensureBindingsLoaded(getDiscordRuntime);
   return listLoadedThreadBindingsBySessionKey(params);
 }
 
 export async function listThreadBindingsBySessionKeyAsync(
   params: Parameters<typeof listThreadBindingsBySessionKey>[0],
 ): Promise<ThreadBindingRecord[]> {
-  await ensureBindingsLoadedAsync();
+  await ensureBindingsLoadedAsync(getDiscordRuntime);
   return listLoadedThreadBindingsBySessionKey(params);
 }
 
@@ -187,7 +189,7 @@ export function unbindThreadBindingsBySessionKey(params: {
     method: "unbindThreadBindingsBySessionKey",
     replacement: "unbindThreadBindingsBySessionKeyAsync",
   });
-  ensureBindingsLoaded();
+  ensureBindingsLoaded(getDiscordRuntime);
   const ids = resolveBindingIdsForTargetSession(params);
   const removed: ThreadBindingRecord[] = [];
   for (const bindingKey of ids) {
@@ -199,7 +201,7 @@ export function unbindThreadBindingsBySessionKey(params: {
     if (manager?.isStopping()) {
       throw new Error("Discord thread binding manager is stopping");
     }
-    const unbound = removeBindingRecordSync(bindingKey);
+    const unbound = removeBindingRecordSync(bindingKey, resolveThreadBindingsOwnerRuntime(manager));
     if (unbound) {
       if (manager) {
         manager.notifyUnbound(unbound, params);

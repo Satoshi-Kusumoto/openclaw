@@ -1,3 +1,4 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import {
   resolveNonNegativeIntegerOption,
@@ -20,6 +21,8 @@ import type {
   ThreadBindingTargetKind,
 } from "./thread-bindings.types.js";
 
+export type ThreadBindingsOwner = { runtime: PluginRuntime | null };
+
 type ThreadBindingsGlobalState = {
   managersByAccountId: Map<string, ThreadBindingManager>;
   bindingsByThreadId: Map<string, ThreadBindingRecord>;
@@ -34,6 +37,7 @@ type ThreadBindingsGlobalState = {
   lastPersistedAtMs: number;
   mutationTail: Promise<void>;
   accountOperationTails: WeakMap<ThreadBindingManager, Promise<void>>;
+  ownersByManager: WeakMap<ThreadBindingManager, ThreadBindingsOwner>;
 };
 
 // Plugin hooks can load this module through a separate runtime path while core
@@ -55,6 +59,7 @@ function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
     lastPersistedAtMs: 0,
     mutationTail: Promise.resolve(),
     accountOperationTails: new WeakMap(),
+    ownersByManager: new WeakMap(),
   };
 }
 
@@ -62,6 +67,13 @@ export const THREAD_BINDINGS_STATE = resolveGlobalSingleton(
   THREAD_BINDINGS_STATE_KEY,
   createThreadBindingsGlobalState,
 );
+
+export function resolveThreadBindingsOwnerRuntime(
+  manager?: ThreadBindingManager,
+): () => PluginRuntime {
+  const owner = manager ? THREAD_BINDINGS_STATE.ownersByManager.get(manager) : undefined;
+  return () => owner?.runtime ?? getDiscordRuntime();
+}
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
@@ -95,15 +107,15 @@ export function shouldDefaultPersist(): boolean {
   return !(process.env.VITEST || process.env.NODE_ENV === "test");
 }
 
-export function openThreadBindingsStore() {
-  return getDiscordRuntime().state.openSyncKeyedStore<ThreadBindingRecord>({
+export function openThreadBindingsStore(resolveRuntime: () => PluginRuntime) {
+  return resolveRuntime().state.openSyncKeyedStore<ThreadBindingRecord>({
     namespace: THREAD_BINDINGS_NAMESPACE,
     maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
   });
 }
 
-export function openThreadBindingsStoreAsync() {
-  return getDiscordRuntime().state.openKeyedStoreV2<ThreadBindingRecord>({
+export function openThreadBindingsStoreAsync(resolveRuntime: () => PluginRuntime) {
+  return resolveRuntime().state.openKeyedStoreV2<ThreadBindingRecord>({
     namespace: THREAD_BINDINGS_NAMESPACE,
     maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
   });
@@ -343,14 +355,14 @@ function restoreBindings(entries: PluginStateEntry<ThreadBindingRecord>[]) {
   }
 }
 
-export function ensureBindingsLoaded() {
+export function ensureBindingsLoaded(resolveRuntime: () => PluginRuntime) {
   if (THREAD_BINDINGS_STATE.loadedBindings) {
     return;
   }
   beginBindingsLoad();
   let entries: PluginStateEntry<ThreadBindingRecord>[];
   try {
-    entries = openThreadBindingsStore().entries();
+    entries = openThreadBindingsStore(resolveRuntime).entries();
   } catch {
     THREAD_BINDINGS_STATE.persistenceAvailable = false;
     return;
@@ -358,10 +370,10 @@ export function ensureBindingsLoaded() {
   restoreBindings(entries);
 }
 
-async function loadBindingsAsync() {
+async function loadBindingsAsync(resolveRuntime: () => PluginRuntime) {
   let entries: PluginStateEntry<ThreadBindingRecord>[];
   try {
-    entries = await openThreadBindingsStoreAsync().entries();
+    entries = await openThreadBindingsStoreAsync(resolveRuntime).entries();
   } catch {
     if (!THREAD_BINDINGS_STATE.loadedBindings) {
       beginBindingsLoad();
@@ -378,11 +390,13 @@ async function loadBindingsAsync() {
   restoreBindings(entries);
 }
 
-export async function ensureBindingsLoadedAsync(): Promise<void> {
+export async function ensureBindingsLoadedAsync(
+  resolveRuntime: () => PluginRuntime,
+): Promise<void> {
   if (THREAD_BINDINGS_STATE.loadedBindings) {
     return;
   }
-  const loading = (THREAD_BINDINGS_STATE.loadingBindings ??= loadBindingsAsync());
+  const loading = (THREAD_BINDINGS_STATE.loadingBindings ??= loadBindingsAsync(resolveRuntime));
   try {
     await loading;
   } finally {

@@ -2,6 +2,8 @@
 export const loadDiscordDraftPreview = () =>
   import("./src/monitor/message-handler.draft-preview.js");
 export { RequestClient } from "./src/internal/discord.js";
+// Cross-instance core binding tests can reset Discord's global thread-binding state without deep extension imports.
+export { resetThreadBindingsForTests } from "./src/monitor/thread-bindings.test-support.js";
 export {
   discordVoiceTranscriptsSourceProvider,
   setDiscordTranscriptsVoiceManager,

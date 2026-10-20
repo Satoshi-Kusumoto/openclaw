@@ -16,6 +16,7 @@ import {
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { discordPlugin } from "../channel.js";
+import { getDiscordRuntime } from "../runtime.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { registerThreadBindingCompatibilityTests } from "./thread-bindings.compatibility.test-support.js";
 import { createThreadBindingManager, getThreadBindingManager } from "./thread-bindings.manager.js";
@@ -191,12 +192,12 @@ it.each(["resolve", "reject"] as const)(
   async (settlement) => {
     const ready = createDeferred<PluginStateEntry<ThreadBindingRecord>[]>();
     stores.entries.mockReturnValueOnce(ready.promise);
-    const loading = ensureBindingsLoadedAsync();
+    const loading = ensureBindingsLoadedAsync(getDiscordRuntime);
     const current = persistedBinding("agent:main:subagent:replacement");
     let manager: ThreadBindingManager | undefined;
     try {
       stores.syncEntries.mockReturnValueOnce([current]);
-      ensureBindingsLoaded();
+      ensureBindingsLoaded(getDiscordRuntime);
       manager = await createTestManager();
       await manager.touchThread({ threadId: "thread-1", at: 200, persist: false });
       expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(
