@@ -28,10 +28,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
@@ -79,6 +77,7 @@ import {
   inheritSessionCreateParentFields,
   prepareSessionCreateParent,
   resolveSessionCreateInheritance,
+  resolveSessionCreateRoot,
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
 import {
@@ -371,19 +370,13 @@ async function createGatewaySessionInScope(
       return initializingSessionFailure();
     }
   }
-  const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
-  // Durable dashboard sessions parent to main for flow-up notices and sidebar threads.
-  // Incognito roots omit durable lineage so notices cannot cross the storage boundary.
-  const dashboardParentSessionKey =
-    !parentSessionKey &&
-    !params.authorizedPluginId &&
-    !incognito &&
-    params.fork !== true &&
-    (params.cfg.session?.dmScope ?? "main") === "main" &&
-    params.cfg.session?.scope !== "global" &&
-    targetSessionKey !== agentMainSessionKey
-      ? agentMainSessionKey
-      : undefined;
+  const { standalone: standaloneRoot, mainParentSessionKey: dashboardParentSessionKey } =
+    resolveSessionCreateRoot(params, {
+      parentSessionKey,
+      incognito,
+      targetSessionKey,
+      mainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId }),
+    });
 
   const authorityTargets = params.operatorAuthority
     ? [
@@ -764,7 +757,6 @@ async function createGatewaySessionInScope(
           personalModelSelection: params.personalModelSelection,
           operatorAuthority,
           preparedModelSelection: params.preparedModelSelection?.ref,
-          pinModelSelection: true,
         });
         if (!patched.ok) {
           return patched;
@@ -800,20 +792,7 @@ async function createGatewaySessionInScope(
         const initializedEntry: InternalSessionEntry = {
           ...patched.entry,
           ...inheritedWorkspace,
-          ...(createdNewEntry && displayName
-            ? {
-                displayName,
-                ...(params.displayNameGenerated
-                  ? {
-                      titleRefinement: {
-                        sessionId: patched.entry.sessionId,
-                        generatedName: displayName,
-                        remainingMessages: 7,
-                      },
-                    }
-                  : {}),
-              }
-            : {}),
+          ...(createdNewEntry && displayName ? { displayName } : {}),
           ...projectSessionCreateSpawnModelSelection({
             entry: patched.entry,
             creation: params.creation,
@@ -900,14 +879,15 @@ async function createGatewaySessionInScope(
         };
         const explicitParentSessionKey =
           canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
+        const newStandaloneRoot = createdNewEntry && standaloneRoot && !explicitParentSessionKey;
         const entry: InternalSessionEntry = {
           ...initializedEntry,
           ...inheritSessionCreateParentFields({
             parent: currentParentSessionEntry,
             overrides: params,
             newExplicitChild: createdNewEntry && Boolean(canonicalParentSessionKey),
-            newDashboardRoot:
-              createdNewEntry && Boolean(dashboardParentSessionKey) && !explicitParentSessionKey,
+            newDashboardRoot: newStandaloneRoot && Boolean(dashboardParentSessionKey),
+            newOperatorRoot: newStandaloneRoot && creation?.via === "operator",
             selectedModel: initializedEntry.modelOverride,
           }),
           ...buildSessionParentLink({

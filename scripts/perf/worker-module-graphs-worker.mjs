@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   GCProfiler,
   getHeapCodeStatistics,
+  getHeapSpaceStatistics,
   getHeapStatistics,
   setFlagsFromString,
   writeHeapSnapshot,
@@ -14,6 +15,7 @@ import {
 import { isMainThread, workerData } from "node:worker_threads";
 
 const replacedFiles = new Set([
+  "src/agents/worktrees/git-worktree-operations.runtime.ts",
   "src/agents/workspace-git.ts",
   "src/gateway/worker-environments/workspace-result-git.ts",
   "src/infra/git-exec.ts",
@@ -69,6 +71,7 @@ if (!isMainThread) {
   let active = false;
   let cpuStart;
   let allocationStart;
+  let spaceStart;
   const gcProfiler = workerData.captureGc ? new GCProfiler() : undefined;
   let measuredAfter = Infinity;
   let samples = [];
@@ -113,6 +116,7 @@ if (!isMainThread) {
         gcProfiler?.start();
         cpuStart = process.threadCpuUsage();
         allocationStart = getHeapStatistics().total_allocated_bytes;
+        spaceStart = workerData.gcDetails ? getHeapSpaceStatistics() : undefined;
         if (!Number.isFinite(allocationStart)) {
           throw new Error("Allocation measurement requires V8 total_allocated_bytes (Node 26.12+)");
         }
@@ -140,7 +144,18 @@ if (!isMainThread) {
         fs.writeSync(1, `WORKER_GC_END ${workerData.name}\n`);
         const cpu = process.threadCpuUsage(cpuStart);
         const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationStart;
+        const spaceEnd = workerData.gcDetails ? getHeapSpaceStatistics() : undefined;
         const gcProfile = gcProfiler?.stop();
+        if (workerData.gcDetails) {
+          fs.writeFileSync(
+            workerData.gcDetails,
+            JSON.stringify({
+              before: spaceStart,
+              after: spaceEnd,
+              profile: gcProfile,
+            }),
+          );
+        }
         if (workerData.sampleAllocation) {
           const { profile } = await inspector.post("HeapProfiler.stopSampling");
           fs.writeFileSync(workerData.sampleAllocation, JSON.stringify(profile));
